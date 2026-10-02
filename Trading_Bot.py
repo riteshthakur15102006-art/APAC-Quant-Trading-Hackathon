@@ -6,10 +6,11 @@ import hashlib
 import hmac
 import time
 import pandas as pd
+import os
 
 
-API_KEY = "os.environ.get('API_KEY')"
-SECRET = "os.environ.get('SECRET')"
+API_KEY = os.environ.get('API_KEY')
+SECRET = os.environ.get('SECRET')
 
 BASE_URL = "https://mock-api.roostoo.com"
 
