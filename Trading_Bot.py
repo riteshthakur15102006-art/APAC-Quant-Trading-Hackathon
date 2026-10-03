@@ -9,10 +9,15 @@ import pandas as pd
 import os
 from datetime import datetime, timezone, timedelta
 
-# MOCK KEYS HARDCODED FOR DEPLOYMENT STABILITY TONIGHT (PREP PERIOD)
+# PRODUCTION KEYS - Ensure these are your real Roostoo API keys for the Oct 4 launch
 API_KEY = os.environ.get('API_KEY')
 SECRET = os.environ.get('SECRET')
 BASE_URL = "https://mock-api.roostoo.com"
+
+# CORE STRATEGY PARAMETERS
+RISK_PERCENTAGE = 0.50  # Risk 50% of available USD per buy
+BUY_DEVIATION = 0.99    # Buy at 1% below the 60-min average
+SELL_DEVIATION = 1.01   # Sell at 1% above the 60-min average
 
 def generate_signature(params):
     query_string = '&'.join(["{}={}".format(k, params[k]) for k in sorted(params.keys())])
@@ -54,23 +59,21 @@ def place_order(coin, side, qty, price=None):
         data=payload,
         headers={"RST-API-KEY": API_KEY, "MSG-SIGNATURE": generate_signature(payload)}
     )
-    # Return True only if the exchange executed the order successfully
     return r.status_code == 200
-
 
 if __name__ == '__main__':
     price_history = []
     daily_trade_count = 0
     
-    # Initialize HKT timezone (UTC+8)
+    # Initialize HKT timezone (UTC+8) to perfectly match hackathon exchange rollover
     hkt_offset = timezone(timedelta(hours=8))
     last_trade_day = datetime.now(hkt_offset).day
 
-    print("Starting Quantitative Execution Loop (HKT Sync - 60 Period MA)...")
+    print("🚀 LIVE: Starting Production Execution Loop (60-Period MA | 50% Sizing)...")
 
     while True:
         try:
-            # Poll every 60 seconds
+            # Poll every 60 seconds to build the 1-minute chart internally
             time.sleep(60)
 
             ticker_data = get_ticker("BNB/USD")
@@ -80,7 +83,7 @@ if __name__ == '__main__':
             if len(price_history) > 60:
                 price_history.pop(0)
 
-            # Wait until we have 60 full minutes of data
+            # Wait until the bot has 60 full minutes of data before executing
             if len(price_history) == 60:
                 wallet = get_balance()
                 usd_free = float(wallet["SpotWallet"]["USD"]["Free"])
@@ -97,19 +100,23 @@ if __name__ == '__main__':
                 series = pd.Series(price_history)
                 rolling_mean = series.mean()
 
-                # 1% deviation logic with 0.1% Taker Fee factored in
-                if current_price < (rolling_mean * 0.99) and usd_free > (current_price * 1.1):
-                    print(f"[{now_hkt.strftime('%H:%M:%S')} HKT] Signal BUY. Price: {current_price}, MA: {rolling_mean:.2f}")
-                    if place_order("BNB", "BUY", 1):
-                        daily_trade_count += 1
-                        print(f"Trade successful. Total trades today: {daily_trade_count}")
+                # --- DYNAMIC BUY LOGIC ---
+                if current_price < (rolling_mean * BUY_DEVIATION) and usd_free > 10:
+                    usd_to_spend = usd_free * RISK_PERCENTAGE
+                    trade_qty = round(usd_to_spend / current_price, 4)
+                    
+                    if trade_qty > 0.01:
+                        print(f"[{now_hkt.strftime('%H:%M:%S')} HKT] 🟢 Signal BUY. Investing ${usd_to_spend:.2f} for {trade_qty} BNB.")
+                        if place_order("BNB", "BUY", trade_qty):
+                            daily_trade_count += 1
 
-                elif current_price > (rolling_mean * 1.01) and bnb_free >= 1:
-                    print(f"[{now_hkt.strftime('%H:%M:%S')} HKT] Signal SELL. Price: {current_price}, MA: {rolling_mean:.2f}")
-                    if place_order("BNB", "SELL", 1):
+                # --- DYNAMIC SELL LOGIC ---
+                elif current_price > (rolling_mean * SELL_DEVIATION) and bnb_free >= 0.01:
+                    trade_qty = round(bnb_free, 4)
+                    print(f"[{now_hkt.strftime('%H:%M:%S')} HKT] 🔴 Signal SELL. Liquidating {trade_qty} BNB.")
+                    if place_order("BNB", "SELL", trade_qty):
                         daily_trade_count += 1
-                        print(f"Trade successful. Total trades today: {daily_trade_count}")
 
         except Exception as e:
-            print(f"[{datetime.now(hkt_offset).strftime('%H:%M:%S')} HKT] Critical Error: {e}. Sleeping 10s...")
+            print(f"[{datetime.now(hkt_offset).strftime('%H:%M:%S')} HKT] ⚠️ Critical Error: {e}. Sleeping 10s...")
             time.sleep(10)
